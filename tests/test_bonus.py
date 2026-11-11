@@ -39,13 +39,22 @@ class BonusToolsTests(unittest.TestCase):
         self.assertEqual(t.execute('get_vercel_status',{})['http_status'],429)
         self.assertEqual(t.execute('get_vercel_status',{})['provider'],'vercel')
         t=BonusTools(scenario='rate_limit_always')
-        self.assertTrue(all(t.execute('get_vercel_status',{})['error']=='RATE_LIMITED' for _ in range(4)))
+        results = [t.execute('get_vercel_status', {}) for _ in range(4)]
+        self.assertTrue(all(result['error'] == 'RATE_LIMITED' for result in results))
+        self.assertEqual([result['retriable'] for result in results], [True, True, False, False])
+        self.assertEqual(t.calls[('get_vercel_status', 'vercel')], 3)
+        self.assertEqual(t.execute('get_github_status', {})['provider'], 'github')
     def test_live_http_429_is_not_an_outage(self):
         err=urllib.error.HTTPError('https://example.invalid',429,'rate limited',{'Retry-After':'2'},io.BytesIO(b''))
-        with patch('bonus.tools.urllib.request.urlopen',side_effect=err):
-            result=BonusTools(mode='live').execute('get_npm_status',{})
+        with patch('bonus.tools.urllib.request.urlopen', side_effect=err) as request:
+            tools = BonusTools(mode='live')
+            result = tools.execute('get_npm_status', {})
+            blocked = tools.execute('get_incident_details', {'provider': 'npm', 'incident_id': 'any'})
+            self.assertEqual(request.call_count, 1)
         self.assertEqual(result['error'],'RATE_LIMITED')
         self.assertEqual(result['retry_after'],'2')
+        self.assertEqual(result['retry_after_seconds'], 2)
+        self.assertFalse(blocked['retriable'])
         err.close()
     def test_format_once_and_context_noise(self):
         t=BonusTools(scenario='format_once')
